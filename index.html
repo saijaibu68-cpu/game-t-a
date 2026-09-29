@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR Frogger - เกมกบข้ามถนน AR</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- MediaPipe Pose & Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: 'Kanit', sans-serif;
+            background-color: #0f172a;
+            user-select: none;
+            -webkit-user-select: none;
+            overflow: hidden;
+        }
+        /* Custom pulse and glow effects */
+        .glow-green {
+            box-shadow: 0 0 20px rgba(34, 197, 94, 0.6);
+        }
+        .glow-red {
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.6);
+        }
+        /* Hidden video element used for tracking and background drawing */
+        #webcam-video {
+            transform: scaleX(-1); /* Mirror camera */
+            display: none;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col justify-center items-center relative text-white">
+
+    <!-- Top HUD Banner -->
+    <header class="absolute top-3 left-0 right-0 z-20 px-4 max-w-4xl mx-auto flex justify-between items-center bg-slate-900/80 backdrop-blur-md rounded-2xl border border-slate-700/50 p-3 shadow-xl">
+        <div class="flex items-center space-x-3">
+            <span class="text-3xl animate-bounce">🐸</span>
+            <div>
+                <h1 class="text-lg font-bold text-emerald-400 leading-none">AR Frogger</h1>
+                <p class="text-xs text-slate-400">เกมกบข้ามถนนด้วยร่างกาย</p>
+            </div>
+        </div>
+
+        <!-- Dynamic Game Stats -->
+        <div class="flex items-center space-x-6">
+            <div class="text-center">
+                <p class="text-xs text-slate-400 uppercase tracking-wider">คะแนน (Score)</p>
+                <p id="score-val" class="text-2xl font-black text-amber-400">0</p>
+            </div>
+            <div class="text-center">
+                <p class="text-xs text-slate-400 uppercase tracking-wider">สถิติ (High)</p>
+                <p id="high-score-val" class="text-2xl font-black text-emerald-400">0</p>
+            </div>
+            <div class="text-center">
+                <p class="text-xs text-slate-400 uppercase tracking-wider">พลังชีวิต</p>
+                <div id="lives-container" class="flex space-x-1 text-red-500 text-lg">
+                    <i class="fa-solid fa-heart"></i>
+                    <i class="fa-solid fa-heart"></i>
+                    <i class="fa-solid fa-heart"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mute and Camera Controls -->
+        <div class="flex items-center space-x-2">
+            <button id="btn-audio" class="p-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl border border-slate-600 text-slate-200 transition">
+                <i id="audio-icon" class="fa-solid fa-volume-high"></i>
+            </button>
+            <button id="btn-recalibrate" title="รีเซ็ตตำแหน่งกล้อง" class="p-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl border border-slate-600 text-slate-200 transition">
+                <i class="fa-solid fa-arrows-rotate"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Game Container with Canvas -->
+    <main class="relative w-full max-w-4xl h-[82vh] max-h-[750px] bg-black rounded-3xl overflow-hidden border-2 border-slate-800 shadow-2xl flex justify-center items-center">
+        <!-- Hidden video element -->
+        <video id="webcam-video" playsinline></video>
+        
+        <!-- Game Canvas -->
+        <canvas id="gameCanvas" class="w-full h-full block object-cover"></canvas>
+
+        <!-- Jump Tracker Motion Gauge HUD (Bottom Right) -->
+        <div class="absolute bottom-4 right-4 bg-slate-900/85 backdrop-blur-md p-3 rounded-2xl border border-slate-700/60 text-xs w-48 shadow-lg z-10">
+            <div class="flex justify-between items-center mb-1">
+                <span class="text-slate-300 font-semibold flex items-center gap-1">
+                    <i class="fa-solid fa-person-running text-emerald-400"></i> Motion Jump
+                </span>
+                <span id="pose-status" class="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 font-medium">กล้องปิด</span>
+            </div>
+            <!-- Jump Motion Intensity Bar -->
+            <div class="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden border border-slate-700 relative">
+                <div id="motion-bar" class="bg-gradient-to-r from-blue-500 to-emerald-400 h-full w-0 transition-all duration-75"></div>
+                <!-- Threshold indicator line -->
+                <div class="absolute top-0 bottom-0 left-[60%] w-0.5 bg-yellow-400/80"></div>
+            </div>
+            <div class="flex justify-between text-[10px] text-slate-400 mt-1">
+                <span>นิ่ง</span>
+                <span class="text-yellow-400 font-bold">จุดกระโดด</span>
+                <span>แรง</span>
+            </div>
+        </div>
+
+        <!-- On-screen Motion Feedback Popup -->
+        <div id="jump-feedback" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-emerald-500/90 text-white font-extrabold text-2xl px-6 py-3 rounded-full border-2 border-white shadow-2xl transition-all duration-200 scale-0 opacity-0 pointer-events-none z-20 flex items-center gap-2">
+            <span>JUMP!</span> 🐸💨
+        </div>
+
+        <!-- Mobile / Fallback Touch & Keyboard Controls Bar -->
+        <div class="absolute bottom-4 left-4 z-10 flex gap-2">
+            <button id="btn-manual-jump" class="bg-emerald-600/90 hover:bg-emerald-500 active:scale-95 text-white text-sm font-bold px-4 py-2.5 rounded-xl border border-emerald-400/50 shadow-lg flex items-center gap-2 transition">
+                <i class="fa-solid fa-circle-arrow-up text-lg"></i> กระโดด (Space)
+            </button>
+            <button id="btn-left" class="bg-slate-800/80 hover:bg-slate-700 active:scale-95 text-white p-2.5 rounded-xl border border-slate-600 transition">
+                <i class="fa-solid fa-arrow-left"></i>
+            </button>
+            <button id="btn-right" class="bg-slate-800/80 hover:bg-slate-700 active:scale-95 text-white p-2.5 rounded-xl border border-slate-600 transition">
+                <i class="fa-solid fa-arrow-right"></i>
+            </button>
+        </div>
+
+        <!-- Overlay Start / Game Over Modal -->
+        <div id="game-modal" class="absolute inset-0 bg-slate-950/85 backdrop-blur-md z-30 flex flex-col justify-center items-center text-center p-6 transition-opacity duration-300">
+            <div class="bg-slate-900 border border-slate-700 p-8 rounded-3xl max-w-md w-full shadow-2xl relative overflow-hidden">
+                <div class="text-6xl mb-3 animate-bounce">🐸🚘</div>
+                <h2 id="modal-title" class="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-amber-300 mb-2">AR FROGGER</h2>
+                <p id="modal-desc" class="text-slate-300 text-sm mb-6 leading-relaxed">
+                    ยื่นหน้ากล้องแล้วทำท่า <strong class="text-emerald-400">"กระโดดตัวขึ้นจริงๆ"</strong> เพื่อพากบน้อยข้ามถนนผ่านฝูงรถ! หรือใช้ปุ่มลูกศร / Spacebar บนคีย์บอร์ด
+                </p>
+
+                <!-- Camera Access Status -->
+                <div id="cam-status-box" class="mb-6 p-3 bg-slate-800/80 rounded-xl border border-slate-700 text-xs text-slate-300 flex items-center justify-between">
+                    <span class="flex items-center gap-2">
+                        <i class="fa-solid fa-video text-amber-400"></i> สถานะกล้อง:
+                    </span>
+                    <span id="cam-status-text" class="text-amber-400 font-bold">กำลังขอสิทธิ์ใช้งาน...</span>
+                </div>
+
+                <button id="btn-start" class="w-full py-4 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-lg rounded-2xl shadow-lg hover:shadow-emerald-500/30 transition transform active:scale-98">
+                    เริ่มเล่นเกม (START)
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // ==========================================
+        // 1. WEB AUDIO API SYNTHESIZER (NO EXTERNAL MP3)
+        // ==========================================
+        class SoundEngine {
+            constructor() {
+                this.ctx = null;
+                this.muted = false;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioContext();
+                }
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            }
+
+            // Play Jump (Boing Sound)
+            playJump() {
+                if (this.muted || !this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(160, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(480, this.ctx.currentTime + 0.15);
+
+                gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.15);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.15);
+            }
+
+            // Play Collision (Ouch / Car Hit Sound)
+            playCollision() {
+                if (this.muted || !this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(140, this.ctx.currentTime);
+                osc.frequency.linearRampToValueAtTime(40, this.ctx.currentTime + 0.25);
+
+                gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.25);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.25);
+            }
+
+            // Play Win Fanfare Sound
+            playWin() {
+                if (this.muted || !this.ctx) return;
+                const notes = [261.63, 329.63, 392.00, 523.25]; // C4, E4, G4, C5
+                notes.forEach((freq, idx) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(freq, this.ctx.currentTime + idx * 0.08);
+
+                    gain.gain.setValueAtTime(0.25, this.ctx.currentTime + idx * 0.08);
+                    gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + idx * 0.08 + 0.2);
+
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+
+                    osc.start(this.ctx.currentTime + idx * 0.08);
+                    osc.stop(this.ctx.currentTime + idx * 0.08 + 0.2);
+                });
+            }
+        }
+
+        const audio = new SoundEngine();
+
+        // ==========================================
+        // 2. GAME GLOBAL STATE & CANVAS SETUP
+        // ==========================================
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const videoElement = document.getElementById('webcam-video');
+
+        // Responsive grid configuration
+        const GRID_ROWS = 9;  // Row 0 = Win Zone, Row 1-7 = Road Lanes, Row 8 = Start
+        const GRID_COLS = 10;
+        let cellW = 0;
+        let cellH = 0;
+
+        // Player Frog Object
+        const frog = {
+            col: 4,
+            row: 8,
+            targetY: 0,
+            currentY: 0,
+            emoji: '🐸',
+            isMoving: false
+        };
+
+        // Vehicles configuration
+        let cars = [];
+        const CAR_EMOJIS = ['🚘', '🏎️', '🚚', '🚗', '🚕', '🚓', '🚌', '🛵'];
+
+        // Game Metrics
+        let score = 0;
+        let highScore = parseInt(localStorage.getItem('ar_frogger_high') || '0');
+        let lives = 3;
+        let isGameActive = false;
+
+        // Motion detection tracking variables
+        let prevNoseY = null;
+        let smoothedY = null;
+        let canJumpMotion = true;
+        let jumpThreshold = 0.038; // Upward Y displacement threshold for Mediapipe normalized coord
+
+        document.getElementById('high-score-val').innerText = highScore;
+
+        // Resize canvas to match container size
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            cellW = canvas.width / GRID_COLS;
+            cellH = canvas.height / GRID_ROWS;
+            frog.currentY = frog.row * cellH;
+            frog.targetY = frog.currentY;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Lane setup with varying directions & speeds
+        const laneConfigs = [
+            { row: 1, speed: 2.2, dir: 1, emoji: '🏎️' },
+            { row: 2, speed: -1.8, dir: -1, emoji: '🚘' },
+            { row: 3, speed: 2.8, dir: 1, emoji: '🚚' },
+            { row: 4, speed: -2.4, dir: -1, emoji: '🚓' },
+            { row: 5, speed: 1.9, dir: 1, emoji: '🚌' },
+            { row: 6, speed: -3.2, dir: -1, emoji: '🏎️' },
+            { row: 7, speed: 2.5, dir: 1, emoji: '🚕' },
+        ];
+
+        // Spawn cars inside lanes
+        function initCars() {
+            cars = [];
+            laneConfigs.forEach(lane => {
+                const numCars = Math.floor(Math.random() * 2) + 2; // 2 or 3 cars per lane
+                const spacing = canvas.width / numCars;
+                for (let i = 0; i < numCars; i++) {
+                    cars.push({
+                        x: i * spacing + Math.random() * 40,
+                        row: lane.row,
+                        speed: lane.speed,
+                        dir: lane.dir,
+                        emoji: lane.emoji,
+                        width: cellW * 0.9,
+                        height: cellH * 0.8
+                    });
+                }
+            });
+        }
+
+        // ==========================================
+        // 3. MEDIAPIPE POSE & WEBCAM TRACKING
+        // ==========================================
+        const poseStatusEl = document.getElementById('pose-status');
+        const camStatusText = document.getElementById('cam-status-text');
+        const motionBar = document.getElementById('motion-bar');
+
+        const pose = new Pose({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        });
+
+        pose.setOptions({
+            modelComplexity: 1,
+            smoothLandmarks: true,
+            enableSegmentation: false,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        pose.onResults(onPoseResults);
+
+        function onPoseResults(results) {
+            // Update camera status indicator once pose starts giving data
+            if (poseStatusEl.innerText !== "พร้อมใช้งาน") {
+                poseStatusEl.innerText = "พร้อมใช้งาน";
+                poseStatusEl.className = "text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-medium";
+                camStatusText.innerText = "เชื่อมต่อสำเร็จ!";
+                camStatusText.className = "text-emerald-400 font-bold";
+            }
+
+            if (!results.poseLandmarks) return;
+
+            // Use Nose (Index 0) or average of shoulders (11, 12) for jump tracking
+            const nose = results.poseLandmarks[0];
+            const leftShoulder = results.poseLandmarks[11];
+            const rightShoulder = results.poseLandmarks[12];
+
+            if (!nose) return;
+
+            // Calculate average Y position (0 = top, 1 = bottom of webcam image)
+            const currentY = (nose.y + (leftShoulder ? leftShoulder.y : nose.y) + (rightShoulder ? rightShoulder.y : nose.y)) / 3;
+
+            if (smoothedY === null) {
+                smoothedY = currentY;
+                return;
+            }
+
+            // Exponential smoothing for steady baseline
+            smoothedY = smoothedY * 0.85 + currentY * 0.15;
+
+            // Delta Y: Jumping UP in real world means nose Y DECREASES rapidly in image frame
+            const upwardDelta = smoothedY - currentY;
+
+            // Visual Motion Gauge update (0 to 100%)
+            const gaugePercent = Math.min(Math.max((upwardDelta / (jumpThreshold * 1.5)) * 100, 0), 100);
+            motionBar.style.width = `${gaugePercent}%`;
+
+            // Trigger Jump action when threshold exceeded
+            if (upwardDelta > jumpThreshold && canJumpMotion && isGameActive) {
+                triggerJump('up');
+                canJumpMotion = false;
+                
+                // Show jump feedback popup
+                showJumpFeedback();
+
+                // Cool-down period to prevent duplicate triggers from 1 jump bounce
+                setTimeout(() => {
+                    canJumpMotion = true;
+                }, 400);
+            }
+        }
+
+        // Start Webcam using MediaPipe CameraUtils
+        let camera = null;
+        function initCamera() {
+            camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await pose.send({ image: videoElement });
+                },
+                width: 640,
+                height: 480
+            });
+
+            camera.start().then(() => {
+                camStatusText.innerText = "กำลังประมวลผลท่าทาง...";
+            }).catch(err => {
+                console.warn("Camera access denied or unavailable:", err);
+                camStatusText.innerText = "ไม่พบกล้อง - เล่นด้วยแป้นพิมพ์ได้";
+                camStatusText.className = "text-amber-400 font-bold";
+                poseStatusEl.innerText = "ใช้คีย์บอร์ด";
+            });
+        }
+
+        // ==========================================
+        // 4. FROG MOVEMENT & GAME ACTIONS
+        // ==========================================
+        function triggerJump(dir) {
+            if (!isGameActive) return;
+
+            audio.init();
+
+            if (dir === 'up') {
+                if (frog.row > 0) {
+                    frog.row--;
+                    audio.playJump();
+                }
+            } else if (dir === 'left') {
+                if (frog.col > 0) {
+                    frog.col--;
+                    audio.playJump();
+                }
+            } else if (dir === 'right') {
+                if (frog.col < GRID_COLS - 1) {
+                    frog.col++;
+                    audio.playJump();
+                }
+            } else if (dir === 'down') {
+                if (frog.row < GRID_ROWS - 1) {
+                    frog.row++;
+                    audio.playJump();
+                }
+            }
+
+            // Check Win Condition immediately
+            if (frog.row === 0) {
+                handleWin();
+            }
+        }
+
+        // Visual jump indicator popup
+        const jumpFeedbackEl = document.getElementById('jump-feedback');
+        function showJumpFeedback() {
+            jumpFeedbackEl.classList.remove('scale-0', 'opacity-0');
+            jumpFeedbackEl.classList.add('scale-100', 'opacity-100');
+            setTimeout(() => {
+                jumpFeedbackEl.classList.remove('scale-100', 'opacity-100');
+                jumpFeedbackEl.classList.add('scale-0', 'opacity-0');
+            }, 250);
+        }
+
+        // Win Condition
+        function handleWin() {
+            score += 1;
+            document.getElementById('score-val').innerText = score;
+
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('ar_frogger_high', highScore);
+                document.getElementById('high-score-val').innerText = highScore;
+            }
+
+            audio.playWin();
+
+            // Reset Frog to starting bottom position
+            setTimeout(() => {
+                frog.row = 8;
+                frog.col = 4;
+            }, 300);
+        }
+
+        // Collision Condition
+        function handleCollision() {
+            audio.playCollision();
+            lives--;
+            updateLivesUI();
+
+            // Flash background red effect
+            canvas.classList.add('glow-red');
+            setTimeout(() => canvas.classList.remove('glow-red'), 300);
+
+            if (lives <= 0) {
+                gameOver();
+            } else {
+                // Reset frog position
+                frog.row = 8;
+                frog.col = 4;
+            }
+        }
+
+        function updateLivesUI() {
+            const container = document.getElementById('lives-container');
+            container.innerHTML = '';
+            for (let i = 0; i < 3; i++) {
+                if (i < lives) {
+                    container.innerHTML += '<i class="fa-solid fa-heart"></i>';
+                } else {
+                    container.innerHTML += '<i class="fa-regular fa-heart text-slate-600"></i>';
+                }
+            }
+        }
+
+        function gameOver() {
+            isGameActive = false;
+            document.getElementById('modal-title').innerText = "GAME OVER!";
+            document.getElementById('modal-desc').innerHTML = `คุณทำได้ <strong>${score} คะแนน</strong><br>ลองใหม่อีกครั้งเพื่อทำสถิติใหม่!`;
+            document.getElementById('btn-start').innerText = "เล่นใหม่อีกครั้ง (REPLAY)";
+            document.getElementById('game-modal').classList.remove('opacity-0', 'pointer-events-none');
+        }
+
+        function resetGame() {
+            score = 0;
+            lives = 3;
+            frog.row = 8;
+            frog.col = 4;
+            document.getElementById('score-val').innerText = score;
+            updateLivesUI();
+            initCars();
+            isGameActive = true;
+            document.getElementById('game-modal').classList.add('opacity-0', 'pointer-events-none');
+        }
+
+        // ==========================================
+        // 5. MAIN RENDER & UPDATE LOOP
+        // ==========================================
+        function updateCars() {
+            cars.forEach(car => {
+                car.x += car.speed;
+
+                // Wrap around edges
+                if (car.speed > 0 && car.x > canvas.width + cellW) {
+                    car.x = -cellW;
+                } else if (car.speed < 0 && car.x < -cellW * 2) {
+                    car.x = canvas.width + cellW;
+                }
+
+                // Collision Detection with Frog
+                if (isGameActive && car.row === frog.row) {
+                    const frogX = frog.col * cellW + cellW * 0.5;
+                    const carCenterX = car.x + car.width * 0.5;
+                    
+                    // Simple Bounding Box Distance Check
+                    if (Math.abs(frogX - carCenterX) < cellW * 0.65) {
+                        handleCollision();
+                    }
+                }
+            });
+        }
+
+        function drawGame() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // A. Draw Webcam Video Background (Mirrored for natural feel)
+            if (videoElement.readyState >= 2) {
+                ctx.save();
+                ctx.translate(canvas.width, 0);
+                ctx.scale(-1, 1);
+                ctx.globalAlpha = 0.65; // Semi-transparent webcam feed so game elements pop!
+                ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+                ctx.restore();
+            } else {
+                // Fallback dark gradient if video not ready
+                const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                grad.addColorStop(0, '#0f172a');
+                grad.addColorStop(1, '#1e293b');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+
+            // B. Draw Lanes & Environment Overlay
+            for (let r = 0; r < GRID_ROWS; r++) {
+                const y = r * cellH;
+
+                if (r === 0) {
+                    // Win Safe Zone (Top)
+                    ctx.fillStyle = 'rgba(16, 185, 129, 0.45)';
+                    ctx.fillRect(0, y, canvas.width, cellH);
+                    
+                    ctx.fillStyle = '#6ee7b7';
+                    ctx.font = `${cellH * 0.4}px Kanit`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('🏁 FINISH ZONE 🏁', canvas.width / 2, y + cellH / 2);
+                } else if (r === 8) {
+                    // Start Safe Zone (Bottom)
+                    ctx.fillStyle = 'rgba(59, 130, 246, 0.45)';
+                    ctx.fillRect(0, y, canvas.width, cellH);
+
+                    ctx.fillStyle = '#93c5fd';
+                    ctx.font = `${cellH * 0.35}px Kanit`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('🚩 START ZONE', canvas.width / 2, y + cellH / 2);
+                } else {
+                    // Road Lanes
+                    ctx.fillStyle = r % 2 === 0 ? 'rgba(15, 23, 42, 0.65)' : 'rgba(30, 41, 59, 0.65)';
+                    ctx.fillRect(0, y, canvas.width, cellH);
+
+                    // Dashed Lane Dividers
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([15, 15]);
+                    ctx.beginPath();
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(canvas.width, y);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+            }
+
+            // C. Draw Vehicles
+            cars.forEach(car => {
+                const carY = car.row * cellH + cellH * 0.1;
+                ctx.font = `${cellH * 0.75}px sans-serif`;
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+
+                // Flip emoji if driving left
+                ctx.save();
+                if (car.dir < 0) {
+                    ctx.translate(car.x + car.width, carY);
+                    ctx.scale(-1, 1);
+                    ctx.fillText(car.emoji, 0, 0);
+                } else {
+                    ctx.fillText(car.emoji, car.x, carY);
+                }
+                ctx.restore();
+            });
+
+            // D. Draw Player Frog
+            const frogX = frog.col * cellW + cellW * 0.1;
+            const frogY = frog.row * cellH + cellH * 0.1;
+
+            ctx.font = `${cellH * 0.8}px sans-serif`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+
+            // Shadow under frog
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.beginPath();
+            ctx.ellipse(
+                frog.col * cellW + cellW / 2,
+                frog.row * cellH + cellH * 0.85,
+                cellW * 0.3,
+                cellH * 0.15,
+                0, 0, Math.PI * 2
+            );
+            ctx.fill();
+
+            // Render Frog
+            ctx.fillText(frog.emoji, frogX, frogY);
+        }
+
+        function gameLoop() {
+            updateCars();
+            drawGame();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // ==========================================
+        // 6. CONTROLS & EVENT LISTENERS
+        // ==========================================
+        // Keyboard Support
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'ArrowUp' || e.code === 'Space' || e.code === 'KeyW') {
+                e.preventDefault();
+                triggerJump('up');
+            } else if (e.code === 'ArrowLeft' || e.code === 'KeyA') {
+                e.preventDefault();
+                triggerJump('left');
+            } else if (e.code === 'ArrowRight' || e.code === 'KeyD') {
+                e.preventDefault();
+                triggerJump('right');
+            } else if (e.code === 'ArrowDown' || e.code === 'KeyS') {
+                e.preventDefault();
+                triggerJump('down');
+            }
+        });
+
+        // Touch / UI Buttons Support
+        document.getElementById('btn-manual-jump').addEventListener('click', () => triggerJump('up'));
+        document.getElementById('btn-left').addEventListener('click', () => triggerJump('left'));
+        document.getElementById('btn-right').addEventListener('click', () => triggerJump('right'));
+
+        // Start / Reset Game Button
+        document.getElementById('btn-start').addEventListener('click', () => {
+            audio.init();
+            resetGame();
+        });
+
+        // Mute Toggle Button
+        const btnAudio = document.getElementById('btn-audio');
+        const audioIcon = document.getElementById('audio-icon');
+        btnAudio.addEventListener('click', () => {
+            audio.muted = !audio.muted;
+            if (audio.muted) {
+                audioIcon.className = 'fa-solid fa-volume-xmark text-red-400';
+            } else {
+                audioIcon.className = 'fa-solid fa-volume-high text-slate-200';
+            }
+        });
+
+        // Recalibrate Camera / Motion Baseline
+        document.getElementById('btn-recalibrate').addEventListener('click', () => {
+            smoothedY = null;
+            canJumpMotion = true;
+            showJumpFeedback();
+        });
+
+        // ==========================================
+        // 7. INITIALIZATION ON LOAD
+        // ==========================================
+        window.onload = () => {
+            initCars();
+            initCamera();
+            gameLoop();
+        };
+    </script>
+</body>
+</html>
